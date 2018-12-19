@@ -103,13 +103,17 @@ void stream_handler(struct evhttp_request *req, void *arg){
 	serv->stream(req);
 }
 
+void sse_handler(struct evhttp_request *req, void *arg){
+	serv->sse(req);
+}
+
 void ping_handler(struct evhttp_request *req, void *arg){
 	serv->ping(req);
 }
 
 #define CHECK_AUTH() \
 	do{ \
-		evhttp_add_header(req->output_headers, "Server", "icomet"); \
+		evhttp_add_header(req->output_headers, "Server", ICOMET_HTTP_HEADER_SERVER); \
 		bool pass = ip_filter->check_pass(req->remote_host); \
 		if(!pass){ \
 			log_info("admin deny %s:%d", req->remote_host, req->remote_port); \
@@ -214,7 +218,7 @@ int main(int argc, char **argv){
 		// 销毁通道
 		// /close?cname=abc
 		evhttp_set_cb(admin_http, "/close", close_handler, NULL);
-		// 销毁通道
+		// 清除通道的消息
 		// /clear?cname=abc
 		evhttp_set_cb(admin_http, "/clear", clear_handler, NULL);
 		// 获取通道的信息
@@ -285,6 +289,8 @@ int main(int argc, char **argv){
 		evhttp_set_cb(front_http, "/iframe", iframe_handler, NULL);
 		// http endless chunk
 		evhttp_set_cb(front_http, "/stream", stream_handler, NULL);
+		// http5 Server Send Event
+		evhttp_set_cb(front_http, "/sse", sse_handler, NULL);
 		// /ping?cb=jsonp
 		evhttp_set_cb(front_http, "/ping", ping_handler, NULL);
 

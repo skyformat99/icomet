@@ -12,56 +12,7 @@ found in the LICENSE file.
 #include "server_config.h"
 #include "util/log.h"
 #include "util/list.h"
-
-class HttpQuery{
-private:
-	struct evkeyvalq _get;
-	struct evkeyvalq _post;
-	bool _has_post;
-public:
-	HttpQuery(struct evhttp_request *req){
-		_has_post = false;
-		if(evhttp_request_get_command(req) == EVHTTP_REQ_POST){
-			evbuffer *body_evb = evhttp_request_get_input_buffer(req);
-			size_t len = evbuffer_get_length(body_evb);
-			if(len > 0){
-				_has_post = true;
-				char *data = (char *)malloc(len + 1);
-				evbuffer_copyout(body_evb, data, len);
-				data[len] = '\0';
-				evhttp_parse_query_str(data, &_post);
-				free(data);
-			}
-		}
-		evhttp_parse_query(evhttp_request_get_uri(req), &_get);
-	}
-	~HttpQuery(){
-		evhttp_clear_headers(&_get);
-		if(_has_post){
-			evhttp_clear_headers(&_post);
-		}
-	}
-	int get_int(const char *name, int def){
-		if(_has_post){
-			const char *val = evhttp_find_header(&_post, name);
-			if(val){
-				return atoi(val);
-			}
-		}
-		const char *val = evhttp_find_header(&_get, name);
-		return val? atoi(val) : def;
-	}
-	const char* get_str(const char *name, const char *def){
-		if(_has_post){
-			const char *val = evhttp_find_header(&_post, name);
-			if(val){
-				return val;
-			}
-		}
-		const char *val = evhttp_find_header(&_get, name);
-		return val? val : def;
-	}
-};
+#include "http_query.h"
 
 Server::Server(){
 	this->auth = AUTH_NONE;
@@ -170,35 +121,18 @@ void Server::add_presence(PresenceType type, const std::string &cname){
 	}
 }
 
-static void on_psub_disconnect(struct evhttp_connection *evcon, void *arg){
-	log_info("presence subscriber disconnected");
-	PresenceSubscriber *psub = (PresenceSubscriber *)arg;
-	Server *serv = psub->serv;
-	serv->psub_end(psub);
-}
-
 int Server::psub(struct evhttp_request *req){
-	bufferevent_enable(req->evcon->bufev, EV_READ);
-
 	PresenceSubscriber *psub = new PresenceSubscriber();
 	psub->req = req;
 	psub->serv = this;
 	psubs.push_back(psub);
-	log_info("%s:%d psub, psubs: %d", req->remote_host, req->remote_port, psubs.size);
-
-	evhttp_send_reply_start(req, HTTP_OK, "OK");
-	evhttp_connection_set_closecb(req->evcon, on_psub_disconnect, psub);
+	psub->start();
 	return 0;
 }
 
 int Server::psub_end(PresenceSubscriber *psub){
-	struct evhttp_request *req = psub->req;
-	if(req->evcon){
-		evhttp_connection_set_closecb(req->evcon, NULL, NULL);
-	}
-	evhttp_send_reply_end(req);
 	psubs.remove(psub);
-	log_info("%s:%d psub_end, psubs: %d", req->remote_host, req->remote_port, psubs.size);
+	delete psub;
 	return 0;
 }
 
@@ -214,12 +148,14 @@ int Server::stream(struct evhttp_request *req){
 	return this->sub(req, Subscriber::STREAM);
 }
 
+int Server::sse(struct evhttp_request *req){
+	return this->sub(req, Subscriber::SSE);
+}
+
 int Server::sub_end(Subscriber *sub){
 	subscribers --;
 	Channel *channel = sub->channel;
 	channel->del_subscriber(sub);
-	log_debug("sub_end %s, subs: %d,",
-		channel->name.c_str(), channel->subs.size);
 	delete sub;
 	return 0;
 }
@@ -266,17 +202,12 @@ int Server::sub(struct evhttp_request *req, Subscriber::Type sub_type){
 	Subscriber *sub = new Subscriber();
 	sub->req = req;
 	sub->type = sub_type;
-	sub->idle = 0;
 	sub->seq_next = seq;
 	sub->seq_noop = noop;
 	sub->callback = cb;
 	
 	channel->add_subscriber(sub);
 	subscribers ++;
-
-	log_debug("%s:%d sub %s, seq: %d, subs: %d",
-		req->remote_host, req->remote_port,
-		channel->name.c_str(), seq, channel->subs.size);
 
 	sub->start();
 	return 0;
@@ -443,22 +374,21 @@ int Server::close(struct evhttp_request *req){
 	HttpQuery query(req);
 	std::string cname = query.get_str("cname", "");
 
+	evhttp_add_header(req->output_headers, "Content-Type", "text/html; charset=utf-8");
+	struct evbuffer *buf = evhttp_request_get_output_buffer(req);
+
 	Channel *channel = this->get_channel_by_name(cname);
 	if(!channel){
 		log_warn("channel %s not found", cname.c_str());
-		struct evbuffer *buf = evhttp_request_get_output_buffer(req);
 		evbuffer_add_printf(buf, "channel[%s] not connected\n", cname.c_str());
 		evhttp_send_reply(req, 404, "Not Found", buf);
 		return 0;
 	}
+	
 	log_debug("close channel: %s, subs: %d", cname.c_str(), channel->subs.size);
-		
 	// response to publisher
-	evhttp_add_header(req->output_headers, "Content-Type", "text/html; charset=utf-8");
-	struct evbuffer *buf = evhttp_request_get_output_buffer(req);
 	evbuffer_add_printf(buf, "ok %d\n", channel->seq_next);
 	evhttp_send_reply(req, 200, "OK", buf);
-	
 	channel->close();
 	this->free_channel(channel);
 
@@ -469,22 +399,21 @@ int Server::clear(struct evhttp_request *req){
 	HttpQuery query(req);
 	std::string cname = query.get_str("cname", "");
 
+	evhttp_add_header(req->output_headers, "Content-Type", "text/html; charset=utf-8");
+	struct evbuffer *buf = evhttp_request_get_output_buffer(req);
+
 	Channel *channel = this->get_channel_by_name(cname);
 	if(!channel){
-		log_warn("channel %s not found", cname.c_str());
-		struct evbuffer *buf = evhttp_request_get_output_buffer(req);
+		log_debug("channel %s not found", cname.c_str());
 		evbuffer_add_printf(buf, "channel[%s] not connected\n", cname.c_str());
 		evhttp_send_reply(req, 404, "Not Found", buf);
 		return 0;
 	}
+	
 	log_debug("clear channel: %s, subs: %d", cname.c_str(), channel->subs.size);
-		
 	// response to publisher
-	evhttp_add_header(req->output_headers, "Content-Type", "text/html; charset=utf-8");
-	struct evbuffer *buf = evhttp_request_get_output_buffer(req);
 	evbuffer_add_printf(buf, "ok %d\n", channel->seq_next);
 	evhttp_send_reply(req, 200, "OK", buf);
-
 	channel->clear();
 
 	return 0;

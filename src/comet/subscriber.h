@@ -19,7 +19,8 @@ public:
 	enum Type{
 		POLL	= 0,
 		STREAM	= 1,
-		IFRAME	= 2
+		IFRAME	= 2,
+		SSE		= 3
 	};
 public:
 	Subscriber();
@@ -40,13 +41,18 @@ public:
 
 	void start();
 	void close();
-	void send_chunk(int seq, const char *type, const char *content);
 	
 	void noop();
 	void send_old_msgs();
 	void sync_next_seq();
-	
+
+	void send_chunk(int seq, const char *type, const char *content);	
 	static void send_error_reply(int sub_type, struct evhttp_request *req, const char *cb, const std::string &cname, const char *type, const char *content);
+	
+private:
+	static void send_start(int sub_type, struct evhttp_request *req, const char *cb, bool is_arr=false);
+	static void send_end(int sub_type, struct evhttp_request *req, const char *cb, bool is_arr=false);
+	static void send_msg(struct evhttp_request *req, const char *type, const std::string &cname, int seq, const char *content, bool is_arr=false);
 };
 
 #endif

@@ -34,8 +34,6 @@ private:
 	Channel* new_channel(const std::string &cname);
 	void free_channel(Channel *channel);
 
-	LinkedList<PresenceSubscriber *> psubs;
-
 	void add_presence(PresenceType type, const std::string &cname);
 	//void flush_presence();
 
@@ -47,6 +45,7 @@ public:
 	};
 
 	int auth;
+	LinkedList<PresenceSubscriber *> psubs;
 	
 	Server();
 	~Server();
@@ -58,6 +57,7 @@ public:
 	int poll(struct evhttp_request *req);
 	int iframe(struct evhttp_request *req);
 	int stream(struct evhttp_request *req);
+	int sse(struct evhttp_request *req);
 
 	int pub(struct evhttp_request *req, bool encoded);
 	int broadcast(struct evhttp_request *req);

@@ -1,11 +1,18 @@
+* 0.2.5
+	* Bug fixes:
+		- Fix memory leak bug again, call evhttp_send_reply_end in connection_closecb(2017-09-07)
 * 0.2.3
 	* New features:
+		- Support HTML 5 EventSource(2017-05-17)
+		- icomet.js uses HTML 5 EventSource if available(2017-05-17)
+		- Reliable deliver of broadcast during reconnect(2016-05-13)
 		- /pub supports POST(2016-02-25)
 		- Add icomet-server start options(2014-11-29)
 		- Send periodical presence online events(2014-11-29)
 	* Incompatible changes:
 		- /broadcast will automatically encode content(2015-07-25)
 	* Bug fixes:
+		- Fix noop_seq bug(2017-05-17)
 		- Fix Logger bug on multi-threads(2016-01-25)
 * 0.2.2.2
 	* New features:
